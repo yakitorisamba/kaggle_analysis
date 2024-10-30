@@ -5,12 +5,97 @@ import numpy as np
 from typing import Tuple, List, Dict
 
 def load_data(file_paths: dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """前のコードと同じ"""
-    # 省略（変更なし）
+
+    """
+
+    CSVファイルを読み込む関数
+
+    
+
+    Args:
+
+        file_paths (dict): ファイルパスを含む辞書
+
+    
+
+    Returns:
+
+        Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: 読み込んだデータフレーム
+
+    """
+
+    predict_individual = pd.read_csv(file_paths['individual'], encoding='cp932')
+
+    predict_corporate = pd.read_csv(file_paths['corporate'], encoding='cp932')
+
+    trained_corporate = pd.read_csv(file_paths['trained'], encoding='cp932')
+
+    
+
+    # datetime型に変換
+
+    for df in [predict_individual, predict_corporate, trained_corporate]:
+
+        df['基準年月'] = pd.to_datetime(df['基準年月'], format='%Y-%m-%d')
+
+    
+
+    return predict_individual, predict_corporate, trained_corporate
+
 
 def create_prediction_table(individual_df: pd.DataFrame, corporate_df: pd.DataFrame) -> pd.DataFrame:
-    """前のコードと同じ"""
-    # 省略（変更なし）
+
+    """
+
+    予測結果テーブルを作成する関数
+
+    
+
+    Args:
+
+        individual_df (pd.DataFrame): 個人予測データ
+
+        corporate_df (pd.DataFrame): 法人予測データ
+
+    
+
+    Returns:
+
+        pd.DataFrame: 結合された予測結果テーブル
+
+    """
+
+    # 個人データの処理
+
+    individual_processed = individual_df.rename(columns={'hoge1': 'hoge1_個人'})
+
+    individual_processed = individual_processed[['hoge1_個人', 'hoge2', 'hoge3', 'hoge4']]
+
+    
+
+    # 法人データの処理
+
+    corporate_processed = corporate_df.rename(columns={'hoge1': 'hoge_法人'})
+
+    corporate_processed = corporate_processed[['hoge_法人', 'hoge2', 'hoge3', 'hoge4', 
+
+                                            'hoge5', 'hoge6', 'huga1', 'huga2']]
+
+    
+
+    # データの結合
+
+    merged_df = pd.merge(individual_processed, corporate_processed,
+
+                        on=['hoge2', 'hoge3', 'hoge4'],
+
+                        how='inner')
+
+    
+
+    return merged_df
+
+
 
 def melt_features_and_shap(df: pd.DataFrame, id_vars: List[str]) -> pd.DataFrame:
     """
