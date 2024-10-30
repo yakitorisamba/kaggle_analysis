@@ -3,6 +3,67 @@
 import pandas as pd
 import numpy as np
 from typing import Tuple, List, Dict
+import pandas as pd
+
+def reshape_dataframe(df):
+    """
+    特徴量の数値とSHAP値がペアになっている列のみを対象に、データフレームを縦持ちに変換します。
+
+    Parameters:
+    df (pd.DataFrame): 横持ちのデータを含む入力データフレーム。
+
+    Returns:
+    pd.DataFrame: 縦持ちに変換されたデータフレーム。
+    """
+    # 識別子となる列を指定
+    id_vars = ['huga1', 'huga2', 'huga3']
+    
+    # データフレーム内の全ての列名を取得
+    all_columns = set(df.columns)
+    
+    # 特徴量名のセットを初期化
+    feature_names = set()
+    
+    # '_数値'で終わる列を探し、それに対応する'_shap'列が存在するか確認
+    for col in all_columns:
+        if col.endswith('_数値'):
+            feature_base = col[:-3]  # '_数値'を取り除く
+            shap_col = feature_base + '_shap'
+            if shap_col in all_columns:
+                feature_names.add(feature_base)
+    
+    # 特徴量の数値とSHAP値の列名をリスト化
+    value_vars = []
+    for feature in feature_names:
+        value_vars.extend([feature + '_数値', feature + '_shap'])
+    
+    # データのメルト処理
+    df_long = pd.melt(
+        df,
+        id_vars=id_vars,
+        value_vars=value_vars,
+        var_name='variable',
+        value_name='value'
+    )
+    
+    # 'variable'列を'特徴量_名称'と'suffix'に分割
+    df_long[['特徴量_名称', 'suffix']] = df_long['variable'].str.rsplit('_', n=1, expand=True)
+    
+    # データのピボット処理
+    df_pivot = df_long.pivot_table(
+        index=id_vars + ['特徴量_名称'],
+        columns='suffix',
+        values='value',
+        aggfunc='first'
+    ).reset_index()
+    
+    # 列名の階層をフラット化
+    df_pivot.columns.name = None
+    
+    # 列名をリネーム
+    df_pivot = df_pivot.rename(columns={'数値': '特徴量_数値', 'shap': '特徴量_shap値'})
+    
+    return df_pivot
 
 def load_data(file_paths: dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
