@@ -23,6 +23,22 @@ def initialize_tokenizer():
     mode = tokenizer.Tokenizer.SplitMode.C  # モードC（最も分割単位が大きい）を使用
     return tokenizer_obj, mode
 
+def load_auxiliary_files():
+    """
+    補助ファイル（hoge.csv, huga.csv）を読み込む関数
+    """
+    # hogeファイルの読み込み（全ての列を保持）
+    hoge_df = pd.read_csv('hoge.csv', dtype={'POL_NO': str})
+    
+    # FLGで終わる列を特定
+    flg_columns = [col for col in hoge_df.columns if col.endswith('FLG')]
+    print(f"Found FLG columns: {flg_columns}")
+    
+    # hugaファイルの読み込み
+    huga_df = pd.read_csv('huga.csv', dtype={'POL_ID': str})
+    
+    return hoge_df, huga_df, flg_columns
+
 def preprocess_text(text, tokenizer_obj, mode):
     """
     テキストの前処理を行う関数（Sudachiを使用）
