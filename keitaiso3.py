@@ -17,6 +17,110 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
+def initialize_tokenizer():
+    """
+    Sudachi トークナイザーの初期化
+    """
+    tokenizer_obj = dictionary.Dictionary().create()
+    mode = tokenizer.Tokenizer.SplitMode.C
+    return tokenizer_obj, mode
+
+def preprocess_text(text, tokenizer_obj, mode):
+    """
+    テキストの前処理を行う関数
+    """
+    if pd.isna(text):
+        return ""
+    
+    text = str(text).strip()
+    tokens = tokenizer_obj.tokenize(text, mode)
+    words = []
+    for token in tokens:
+        pos = token.part_of_speech()[0]
+        if pos in ['名詞', '動詞', '形容詞']:
+            words.append(token.dictionary_form())
+    
+    return ' '.join(words)
+
+def extract_frequent_words(texts, tokenizer_obj, mode, top_n=1000):
+    """
+    テキストから頻出単語を抽出する関数
+    """
+    word_counter = Counter()
+    
+    for text in tqdm(texts, desc="Extracting frequent words"):
+        if pd.isna(text):
+            continue
+        tokens = tokenizer_obj.tokenize(str(text).strip(), mode)
+        for token in tokens:
+            pos = token.part_of_speech()[0]
+            if pos in ['名詞', '動詞', '形容詞']:
+                word_counter[token.dictionary_form()] += 1
+    
+    return word_counter
+
+def create_word_features(text, frequent_words):
+    """
+    テキストから頻出単語の特徴量を作成する関数
+    """
+    features = {word: 0 for word in frequent_words}
+    if pd.isna(text):
+        return features
+    
+    text = str(text).strip()
+    for word in text.split():
+        if word in features:
+            features[word] = 1
+    
+    return features
+
+def read_csv_in_chunks(file_pattern, chunk_size=100000):
+    """
+    CSVファイルを分割して読み込む関数
+    """
+    all_chunks = []
+    columns = [
+        'event_datetime', 'seq_no', 'sales_person', 'data_datetime', 
+        'content1', 'content2', 'company_type', 'contract_no', 
+        'converted_contract_no', 'source_id', 'url1', 'url2', 
+        'customer_id'] + [f'col_{i}' for i in range(14, 19)] + ['sales_person_id'] + [f'col_{i}' for i in range(20, 27)]
+    
+    for file in glob.glob(file_pattern):
+        print(f"Processing file: {file}")
+        chunks = pd.read_csv(file, 
+                           names=columns,
+                           chunksize=chunk_size,
+                           dtype={
+                               'converted_contract_no': str,
+                               'company_type': str,
+                               'content1': str,
+                               'customer_id': str
+                           })
+        
+        for chunk in chunks:
+            filtered_chunk = chunk[chunk['company_type'] == 'G']
+            needed_columns = [
+                'event_datetime', 'sales_person', 'content1', 
+                'converted_contract_no', 'sales_person_id', 'customer_id'
+            ]
+            all_chunks.append(filtered_chunk[needed_columns])
+            
+        print(f"Current memory usage: {sum([chunk.memory_usage().sum() for chunk in all_chunks]) / 1024**2:.2f} MB")
+    
+    return pd.concat(all_chunks, ignore_index=True)
+
+def load_auxiliary_files():
+    """
+    補助ファイルを読み込む関数
+    """
+    hoge_df = pd.read_csv('hoge.csv', dtype={'POL_NO': str})
+    flg_columns = [col for col in hoge_df.columns if col.endswith('FLG')]
+    print(f"Found FLG columns: {flg_columns}")
+    
+    huga_df = pd.read_csv('huga.csv', dtype={'POL_ID': str})
+    
+    return hoge_df, huga_df, flg_columns
+
 def plot_frequent_words(word_counter, top_n=30, fig_size=(15, 8)):
     """
     頻出単語をプロットする関数
@@ -24,13 +128,11 @@ def plot_frequent_words(word_counter, top_n=30, fig_size=(15, 8)):
     plt.figure(figsize=fig_size)
     words, counts = zip(*word_counter.most_common(top_n))
     
-    # 横向きの棒グラフを作成
     plt.barh(words, counts)
     plt.title(f'Top {top_n} Most Frequent Words')
     plt.xlabel('Frequency')
     plt.ylabel('Words')
     
-    # レイアウトの調整
     plt.tight_layout()
     plt.savefig('analysis_results/frequent_words_plot.png')
     plt.close()
@@ -61,11 +163,9 @@ def find_optimal_word_count(word_counter, max_words=2000):
     cumsum = np.cumsum(frequencies)
     total_sum = cumsum[-1]
     
-    # カバー率90%となる単語数を見つける
     coverage_threshold = 0.9
     optimal_count = np.where(cumsum / total_sum >= coverage_threshold)[0][0] + 1
     
-    # カバー率のプロット
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, len(cumsum) + 1), cumsum / total_sum)
     plt.axhline(y=coverage_threshold, color='r', linestyle='--', 
@@ -100,9 +200,7 @@ def find_optimal_clusters(features, max_clusters=100, step=5):
         kmeans.fit(features)
         inertias.append(kmeans.inertia_)
         
-        # シルエットスコアの計算
         if features.shape[0] > 10000:
-            # 大規模データセットの場合はサンプリング
             sample_size = 10000
             indices = np.random.choice(features.shape[0], sample_size, replace=False)
             score = silhouette_score(
@@ -114,7 +212,6 @@ def find_optimal_clusters(features, max_clusters=100, step=5):
             score = silhouette_score(features, kmeans.labels_)
         silhouette_scores.append(score)
     
-    # エルボー法による最適クラスター数の検出
     kl = KneeLocator(
         list(n_clusters_range),
         inertias,
@@ -123,10 +220,8 @@ def find_optimal_clusters(features, max_clusters=100, step=5):
     )
     optimal_clusters_elbow = kl.elbow
     
-    # 結果のプロット
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
-    # エルボーカーブ
     ax1.plot(n_clusters_range, inertias)
     ax1.axvline(x=optimal_clusters_elbow, color='r', linestyle='--', 
                 label=f'Elbow point: {optimal_clusters_elbow}')
@@ -136,7 +231,6 @@ def find_optimal_clusters(features, max_clusters=100, step=5):
     ax1.grid(True)
     ax1.legend()
     
-    # シルエットスコア
     ax2.plot(n_clusters_range, silhouette_scores)
     best_silhouette = n_clusters_range[np.argmax(silhouette_scores)]
     ax2.axvline(x=best_silhouette, color='r', linestyle='--', 
@@ -151,7 +245,6 @@ def find_optimal_clusters(features, max_clusters=100, step=5):
     plt.savefig('analysis_results/cluster_optimization_plot.png')
     plt.close()
     
-    # エルボー法とシルエットスコアの結果を返す
     return {
         'elbow_clusters': optimal_clusters_elbow,
         'silhouette_clusters': best_silhouette,
@@ -175,9 +268,35 @@ def visualize_cluster_sizes(merged_df, cluster_features, fig_size=(12, 6)):
     
     return cluster_sizes
 
+def analyze_cluster_features(merged_df, cluster_id, tokenizer_obj, mode):
+    """
+    特定のクラスタの特徴を分析する関数
+    """
+    cluster_docs = merged_df[merged_df['content_cluster'] == cluster_id]['content1']
+    
+    # クラスタ内の頻出単語を抽出
+    word_counter = Counter()
+    for doc in cluster_docs:
+        if pd.isna(doc):
+            continue
+        tokens = tokenizer_obj.tokenize(str(doc).strip(), mode)
+        for token in tokens:
+            pos = token.part_of_speech()[0]
+            if pos in ['名詞', '動詞', '形容詞']:
+                word_counter[token.dictionary_form()] += 1
+    
+    return {
+        'size': len(cluster_docs),
+        'top_words': [word for word, _ in word_counter.most_common(5)],
+        'word_frequencies': dict(word_counter.most_common(20)),
+        'sample_texts': cluster_docs.head(3).tolist()
+    }
+
 def main():
-    # 前のコードの初期化部分は同じ
+    # Sudachiトークナイザーの初期化
     tokenizer_obj, mode = initialize_tokenizer()
+    
+    # データの読み込みと前処理
     print("Reading main data files...")
     main_df = read_csv_in_chunks('temp/*.csv')
     
@@ -197,17 +316,9 @@ def main():
         how='left'
     )
     
-    print("Extracting and analyzing frequent words...")
+    print("Analyzing word frequencies...")
     # 単語頻度の分析
-    word_counter = Counter()
-    for text in merged_df['content1'].values:
-        if pd.isna(text):
-            continue
-        tokens = tokenizer_obj.tokenize(str(text).strip(), mode)
-        for token in tokens:
-            pos = token.part_of_speech()[0]
-            if pos in ['名詞', '動詞', '形容詞']:
-                word_counter[token.dictionary_form()] += 1
+    word_counter = extract_frequent_words(merged_df['content1'].values, tokenizer_obj, mode)
     
     # 頻出単語の可視化
     plot_frequent_words(word_counter)
@@ -223,7 +334,10 @@ def main():
     print("Creating word features...")
     # 特徴量の作成
     word_features = pd.DataFrame([
-        create_word_features(text, frequent_words)
+        create_word_features(
+            preprocess_text(text, tokenizer_obj, mode), 
+            frequent_words
+        )
         for text in tqdm(merged_df['content1'].values, desc="Processing texts")
     ])
     
@@ -249,67 +363,7 @@ def main():
     merged_df['content_cluster'] = final_clusterer.fit_predict(features_array)
     
     # クラスタの特徴分析
+    print("Analyzing cluster features...")
     cluster_features = []
     for i in range(final_clusterer.n_clusters):
-        cluster_docs = merged_df[merged_df['content_cluster'] == i]['content1']
-        
-        # クラスタ内の頻出単語を抽出
-        cluster_words = Counter()
-        for doc in cluster_docs:
-            if pd.isna(doc):
-                continue
-            tokens = tokenizer_obj.tokenize(str(doc).strip(), mode)
-            for token in tokens:
-                pos = token.part_of_speech()[0]
-                if pos in ['名詞', '動詞', '形容詞']:
-                    cluster_words[token.dictionary_form()] += 1
-        
-        top_words = [word for word, _ in cluster_words.most_common(5)]
-        
-        cluster_features.append({
-            'cluster_id': i,
-            'top_terms': top_words,
-            'size': len(cluster_docs),
-            'sample_texts': cluster_docs.head(3).tolist()
-        })
-    
-    # クラスターサイズの可視化
-    cluster_sizes = visualize_cluster_sizes(merged_df, cluster_features)
-    
-    # 結果の保存
-    print("Saving results...")
-    output_dir = 'analysis_results'
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 最適化結果の保存
-    optimization_results = {
-        'optimal_word_count': optimal_word_count,
-        'optimal_clusters': optimal_clusters,
-        'clustering_results': clustering_results
-    }
-    
-    pd.DataFrame([optimization_results]).to_json(
-        f'{output_dir}/optimization_results.json',
-        orient='records'
-    )
-    
-    # その他の結果の保存（前のコードと同様）
-    pd.DataFrame(cluster_features).to_csv(f'{output_dir}/cluster_features.csv', index=False)
-    pd.DataFrame({'frequent_words': frequent_words}).to_csv(
-        f'{output_dir}/frequent_words.csv',
-        index=False
-    )
-    
-    cluster_stats = merged_df.groupby('content_cluster').agg({
-        'content1': 'count',
-        'sales_person': 'nunique',
-        'customer_id': 'nunique'
-    }).reset_index()
-    
-    cluster_stats.to_csv(f'{output_dir}/cluster_statistics.csv', index=False)
-    
-    print("Analysis complete!")
-    return merged_df, cluster_features, frequent_words, cluster_stats, optimization_results
-
-if __name__ == "__main__":
-    merged_df, cluster_features, frequent_words, cluster_stats, optimization_results = main()
+        features = analyze_cluster_features(merged_df, i, tokenizer_
