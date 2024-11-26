@@ -1,136 +1,107 @@
-import csv
-import os
+import pandas as pd
+import numpy as np
+from typing import List, Set
+import sys
 
-def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
-    temp_output_path = csv_output_path + '.tmp'
-    current_fieldnames = set()
+def process_large_csv(
+    file_path: str,
+    chunk_size: int = 100000,
+    key_columns: List[str] = None,
+    memory_limit_gb: float = 4.0
+) -> pd.DataFrame:
+    """
+    大規模CSVファイルを効率的に処理し、指定したキー列の値が同じ連続した行をマージします。
     
-    # First pass to get initial fieldnames
-    with open(csv_input_path, 'r', newline='', encoding='cp932') as csvfile_in:
-        reader = csv.DictReader(csvfile_in, quotechar='"')
-        original_fieldnames = reader.fieldnames.copy()
-        current_fieldnames.update(original_fieldnames)
-
-    with open(csv_input_path, 'r', newline='', encoding='cp932') as csvfile_in, \
-         open(temp_output_path, 'w', newline='', encoding='cp932') as temp_output:
-        
-        reader = csv.DictReader(csvfile_in, quotechar='"')
-        current_group = []
-        current_key_value = None
-
-        # Initialize writer with current fieldnames
-        temp_fieldnames = list(original_fieldnames)
-        temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames, 
-                                   quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        temp_writer.writeheader()
-
-        def handle_new_columns():
-            nonlocal temp_writer, temp_fieldnames
-            # Create new fieldnames list including original and new columns
-            temp_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
-            
-            # Store existing content
-            existing_content = []
-            with open(temp_output_path, 'r', newline='', encoding='cp932') as old_temp:
-                old_reader = csv.DictReader(old_temp, quotechar='"')
-                for row in old_reader:
-                    existing_content.append(row)
-            
-            # Rewrite temp file with updated fieldnames
-            with open(temp_output_path, 'w', newline='', encoding='cp932') as new_temp:
-                new_writer = csv.DictWriter(new_temp, fieldnames=temp_fieldnames,
-                                          quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                new_writer.writeheader()
-                
-                # Write existing content with updated fieldnames
-                for row in existing_content:
-                    new_writer.writerow(row)
-            
-            # Update writer
-            temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames,
-                                       quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
-        def merge_group(group):
-            if not group:
-                return None
-            merged_row = {}
-            column_values = {}
-            
-            # Collect all values for each column across the group
-            for row in group:
-                for col in row.keys():
-                    if col not in column_values:
-                        column_values[col] = [row[col]]
-                    else:
-                        column_values[col].append(row[col])
-
-            # Process each column
-            new_columns_added = False
-            for col, values in column_values.items():
-                unique_values = []
-                for val in values:
-                    if val not in unique_values:
-                        unique_values.append(val)
-                
-                if len(unique_values) == 1:
-                    merged_row[col] = unique_values[0]
-                else:
-                    for idx, val in enumerate(unique_values):
-                        col_name = col if idx == 0 else f"{col}_{idx}"
-                        merged_row[col_name] = val
-                        if col_name not in current_fieldnames:
-                            current_fieldnames.add(col_name)
-                            new_columns_added = True
-            
-            if new_columns_added:
-                handle_new_columns()
-            
-            return merged_row
-
-        # Process rows
-        for row in reader:
-            key_value = row[key_column]
-            if key_value == current_key_value or current_key_value is None:
-                current_group.append(row)
-                current_key_value = key_value
-            else:
-                merged_row = merge_group(current_group)
-                if merged_row:
-                    temp_writer.writerow(merged_row)
-                current_group = [row]
-                current_key_value = key_value
-
-        # Process the last group
-        if current_group:
-            merged_row = merge_group(current_group)
-            if merged_row:
-                temp_writer.writerow(merged_row)
-
-    # Create final output file with all columns
-    final_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
+    Parameters:
+    -----------
+    file_path : str
+        処理するCSVファイルのパス
+    chunk_size : int
+        一度に読み込むチャンクのサイズ
+    key_columns : List[str]
+        比較するキーとなる列名のリスト
+    memory_limit_gb : float
+        使用する最大メモリ制限（GB）
     
-    # Write final output while ensuring all columns are present
-    with open(temp_output_path, 'r', newline='', encoding='cp932') as temp_input, \
-         open(csv_output_path, 'w', newline='', encoding='cp932') as csvfile_out:
+    Returns:
+    --------
+    pd.DataFrame
+        処理結果のデータフレーム
+    """
+    
+    # メモリ使用量を監視する関数
+    def check_memory_usage():
+        memory_usage = sys.getsizeof(result_df) / (1024 ** 3)  # GB単位
+        if memory_usage > memory_limit_gb:
+            raise MemoryError(f"メモリ使用量が制限値({memory_limit_gb}GB)を超えました")
+    
+    # 連続する行をマージする関数
+    def merge_consecutive_rows(group_df: pd.DataFrame) -> pd.DataFrame:
+        if len(group_df) == 1:
+            return group_df
+            
+        result_row = group_df.iloc[0].copy()
         
-        reader = csv.DictReader(temp_input, quotechar='"')
-        writer = csv.DictWriter(csvfile_out, fieldnames=final_fieldnames,
-                              quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        writer.writeheader()
+        # 各列を比較し、異なる値がある場合は新しい列を作成
+        for col in group_df.columns:
+            if col in key_columns:
+                continue
+                
+            values = group_df[col].unique()
+            if len(values) > 1:
+                for i, val in enumerate(values, 1):
+                    result_row[f"{col}_{i}"] = val
+                    
+        return pd.DataFrame([result_row])
+    
+    # 結果を格納するデータフレーム
+    result_df = pd.DataFrame()
+    
+    # CSVファイルを少しずつ読み込んで処理
+    for chunk in pd.read_csv(file_path, chunksize=chunk_size):
+        # キー列でソート
+        chunk_sorted = chunk.sort_values(by=key_columns)
         
-        for row in reader:
-            # Ensure all fields are present in the row
-            complete_row = {field: row.get(field, '') for field in final_fieldnames}
-            writer.writerow(complete_row)
+        # 連続する行をグループ化
+        chunk_grouped = chunk_sorted.groupby(
+            (chunk_sorted[key_columns] != chunk_sorted[key_columns].shift()).any(axis=1).cumsum()
+        )
+        
+        # 各グループを処理
+        processed_chunk = pd.concat([
+            merge_consecutive_rows(group) 
+            for _, group in chunk_grouped
+        ])
+        
+        # 結果を追加
+        result_df = pd.concat([result_df, processed_chunk], ignore_index=True)
+        
+        # メモリ使用量をチェック
+        check_memory_usage()
+    
+    # 最終的な結果をキー列でソートして返す
+    return result_df.sort_values(by=key_columns).reset_index(drop=True)
 
-    # Clean up temporary file
+# 使用例
+if __name__ == "__main__":
+    # ファイルパスと設定
+    file_path = "large_data.csv"
+    key_columns = ["id", "date"]  # キーとなる列名を指定
+    
     try:
-        os.remove(temp_output_path)
-    except:
-        pass  # Ignore errors if file cannot be deleted
-
-# Usage example:
-# csv_input_path = 'input.csv'
-# csv_output_path = 'output.csv'
-# key_column = 'id'
-# merge_consecutive_rows(csv_input_path, csv_output_path, key_column)
+        # データ処理の実行
+        result = process_large_csv(
+            file_path=file_path,
+            chunk_size=100000,
+            key_columns=key_columns,
+            memory_limit_gb=4.0
+        )
+        
+        # 結果の保存
+        result.to_csv("processed_data.csv", index=False)
+        print("処理が完了しました")
+        
+    except MemoryError as e:
+        print(f"エラー: {e}")
+    except Exception as e:
+        print(f"予期せぬエラーが発生しました: {e}")
