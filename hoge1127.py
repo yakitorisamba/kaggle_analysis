@@ -15,11 +15,42 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
          open(temp_output_path, 'w', newline='', encoding='cp932') as temp_output:
         
         reader = csv.DictReader(csvfile_in, quotechar='"')
-        temp_writer = None  # Will be initialized after we know all fieldnames
-        written_header = False
-        
         current_group = []
         current_key_value = None
+
+        # Initialize writer with current fieldnames
+        temp_fieldnames = list(original_fieldnames)
+        temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames, 
+                                   quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        temp_writer.writeheader()
+
+        def update_writer():
+            nonlocal temp_writer, temp_fieldnames
+            # Create new fieldnames list including original and new columns
+            temp_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
+            
+            # Create new temporary file for updated content
+            temp_output_path2 = temp_output_path + '.new'
+            with open(temp_output_path, 'r', newline='', encoding='cp932') as old_temp, \
+                 open(temp_output_path2, 'w', newline='', encoding='cp932') as new_temp:
+                
+                # Read from old temp file
+                old_reader = csv.DictReader(old_temp, quotechar='"')
+                # Write to new temp file with updated fieldnames
+                new_writer = csv.DictWriter(new_temp, fieldnames=temp_fieldnames,
+                                          quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                new_writer.writeheader()
+                
+                # Copy existing content
+                for old_row in old_reader:
+                    new_writer.writerow(old_row)
+            
+            # Replace old temp file with new one
+            os.replace(temp_output_path2, temp_output_path)
+            
+            # Update writer
+            temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames,
+                                       quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
         def merge_group(group):
             if not group:
@@ -29,13 +60,14 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
             
             # Collect all values for each column across the group
             for row in group:
-                for col in row.keys():  # Use row.keys() to catch any new columns
+                for col in row.keys():
                     if col not in column_values:
                         column_values[col] = [row[col]]
                     else:
                         column_values[col].append(row[col])
 
             # Process each column
+            new_columns_added = False
             for col, values in column_values.items():
                 unique_values = []
                 for val in values:
@@ -48,42 +80,17 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
                     for idx, val in enumerate(unique_values):
                         col_name = col if idx == 0 else f"{col}_{idx}"
                         merged_row[col_name] = val
-                        current_fieldnames.add(col_name)
+                        if col_name not in current_fieldnames:
+                            current_fieldnames.add(col_name)
+                            new_columns_added = True
+            
+            if new_columns_added:
+                update_writer()
             
             return merged_row
 
-        def write_row(row_data, writer):
-            nonlocal written_header, temp_writer
-            
-            # Check if we have new columns
-            new_columns = set(row_data.keys()) - current_fieldnames
-            if new_columns:
-                # Update fieldnames set
-                current_fieldnames.update(new_columns)
-                
-                # Create new writer with updated fieldnames
-                fieldnames_list = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
-                temp_writer = csv.DictWriter(temp_output, fieldnames=fieldnames_list, quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                
-                if not written_header:
-                    temp_writer.writeheader()
-                    written_header = True
-            
-            # If writer hasn't been initialized yet, initialize it
-            if temp_writer is None:
-                fieldnames_list = list(original_fieldnames)
-                temp_writer = csv.DictWriter(temp_output, fieldnames=fieldnames_list, quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                if not written_header:
-                    temp_writer.writeheader()
-                    written_header = True
-            
-            temp_writer.writerow(row_data)
-
         # Process rows
         for row in reader:
-            # Add any new columns to current_fieldnames
-            current_fieldnames.update(row.keys())
-            
             key_value = row[key_column]
             if key_value == current_key_value or current_key_value is None:
                 current_group.append(row)
@@ -91,7 +98,7 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
             else:
                 merged_row = merge_group(current_group)
                 if merged_row:
-                    write_row(merged_row, temp_writer)
+                    temp_writer.writerow(merged_row)
                 current_group = [row]
                 current_key_value = key_value
 
@@ -99,16 +106,17 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_column):
         if current_group:
             merged_row = merge_group(current_group)
             if merged_row:
-                write_row(merged_row, temp_writer)
+                temp_writer.writerow(merged_row)
 
-    # Write final output file
+    # Create final output file with all columns
     final_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
     
     with open(temp_output_path, 'r', newline='', encoding='cp932') as temp_input, \
          open(csv_output_path, 'w', newline='', encoding='cp932') as csvfile_out:
         
         reader = csv.DictReader(temp_input, quotechar='"')
-        writer = csv.DictWriter(csvfile_out, fieldnames=final_fieldnames, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        writer = csv.DictWriter(csvfile_out, fieldnames=final_fieldnames,
+                              quotechar='"', quoting=csv.QUOTE_MINIMAL)
         writer.writeheader()
         
         for row in reader:
