@@ -135,3 +135,26 @@ def analyze_large_csv(filepath):
 # 各グラフの表示
 # for name, fig in results.items():
 #     fig.show()
+
+#%%
+def analyze_contacts_by_cancellation(df):
+    # まずmedium_categoryに対して解約の有無を判定する新しい列を作成
+    df = df.assign(has_cancellation=df['medium_category'].str.contains('解約', na=False))
+    
+    # グループ化と集計を明示的な集計関数で実行
+    contact_stats = df.groupby('customer_id').agg({
+        'has_cancellation': 'max',  # Trueが1つでもあればTrueになる
+        'customer_id': 'size'  # countの代わりにsizeを使用
+    }).compute()
+    
+    # 可視化
+    fig = px.box(contact_stats, 
+                x='has_cancellation',
+                y='customer_id',
+                title='解約有無別のコンタクト数分布',
+                labels={
+                    'has_cancellation': '解約有無',
+                    'customer_id': 'コンタクト数',
+                })
+    
+    return fig
