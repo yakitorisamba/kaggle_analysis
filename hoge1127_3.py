@@ -26,135 +26,262 @@ def read_large_csv(filepath):
     
     return df
 
+def analyze_family_contract(df):
+    # customer_idごとに家族登録の有無を判定
+    customer_family = df.groupby('customer_id').agg({
+        'small_category': lambda x: x.str.contains('家族登録', na=False).max(),  # 家族登録の有無
+    }).compute()
+    
+    # customer_idごとの契約成立件数を集計
+    customer_contracts = df.groupby('customer_id').agg({
+        'medium_category': lambda x: x.str.contains('契約成立', na=False).sum()  # 契約成立の件数
+    }).compute()
+    
+    # データの結合
+    analysis_df = pd.merge(
+        customer_family,
+        customer_contracts,
+        left_index=True,
+        right_index=True
+    )
+    
+    # カラム名の変更
+    analysis_df.columns = ['has_family_registration', 'contract_count']
+    
+    # 可視化1: 箱ひげ図で分布を比較
+    fig1 = px.box(
+        analysis_df,
+        x='has_family_registration',
+        y='contract_count',
+        title='家族登録有無による顧客ごとの契約成立数の分布',
+        labels={
+            'has_family_registration': '家族登録',
+            'contract_count': '契約成立数',
+        }
+    )
+    
+    # 可視化2: バイオリンプロットで分布の詳細を表示
+    fig2 = px.violin(
+        analysis_df,
+        x='has_family_registration',
+        y='contract_count',
+        box=True,
+        title='家族登録有無による顧客ごとの契約成立数の分布（詳細）',
+        labels={
+            'has_family_registration': '家族登録',
+            'contract_count': '契約成立数',
+        }
+    )
+    
+    # 基本統計量の計算
+    stats = analysis_df.groupby('has_family_registration')['contract_count'].agg([
+        'count',
+        'mean',
+        'median',
+        'std'
+    ]).round(2)
+    
+    return {
+        'box_plot': fig1,
+        'violin_plot': fig2,
+        'statistics': stats
+    }
+
+def analyze_customer_metrics(df):
+    # 解約とクレーム、コンタクト数の分析
+    def analyze_cancellation_impact():
+        # まず解約フラグを作成
+        df_with_flags = df.assign(
+            has_cancellation=df['medium_category'].str.contains('解約', na=False)
+        )
+        
+        # customer_idごとの集計
+        customer_stats = df_with_flags.groupby('customer_id').agg({
+            'has_cancellation': 'max',  # 解約の有無
+            'is_complaint': 'sum',      # クレーム数
+            'customer_id': 'size'       # コンタクト数
+        }).compute()
+        
+        # 可視化1: クレーム数の分布
+        fig1 = px.box(
+            customer_stats,
+            x='has_cancellation',
+            y='is_complaint',
+            title='解約有無による顧客ごとのクレーム数分布',
+            labels={
+                'has_cancellation': '解約有無',
+                'is_complaint': 'クレーム数'
+            }
+        )
+        
+        # 可視化2: コンタクト数の分布
+        fig2 = px.box(
+            customer_stats,
+            x='has_cancellation',
+            y='customer_id',
+            title='解約有無による顧客ごとのコンタクト数分布',
+            labels={
+                'has_cancellation': '解約有無',
+                'customer_id': 'コンタクト数'
+            }
+        )
+        
+        return {'complaint_dist': fig1, 'contact_dist': fig2}
+    
+    # POL_NOの有無による分析
+    def analyze_polno_impact():
+        # POL_NOの有無フラグを作成
+        df_with_flags = df.assign(
+            has_polno=df['POL_NO'].notna(),
+            has_cancellation=df['medium_category'].str.contains('解約', na=False)
+        )
+        
+        # customer_idごとの集計
+        customer_stats = df_with_flags.groupby('customer_id').agg({
+            'has_polno': 'max',         # POL_NOの有無
+            'has_cancellation': 'max',   # 解約の有無
+            'is_complaint': 'sum',       # クレーム数
+            'customer_id': 'size'        # コンタクト数
+        }).compute()
+        
+        # 可視化: POL_NOの有無による各指標の分布
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=('クレーム数分布', 'コンタクト数分布')
+        )
+        
+        # クレーム数の箱ひげ図
+        fig.add_trace(
+            go.Box(
+                x=customer_stats['has_polno'],
+                y=customer_stats['is_complaint'],
+                name='クレーム数'
+            ),
+            row=1, col=1
+        )
+        
+        # コンタクト数の箱ひげ図
+        fig.add_trace(
+            go.Box(
+                x=customer_stats['has_polno'],
+                y=customer_stats['customer_id'],
+                name='コンタクト数'
+            ),
+            row=2, col=1
+        )
+        
+        fig.update_layout(height=800, title_text="POL_NO有無による各指標の分布")
+        
+        return fig
+    
+    # 満期の分析
+    def analyze_maturity_impact():
+        # 満期フラグを作成
+        df_with_flags = df.assign(
+            has_maturity=df['medium_category'].str.contains('満期', na=False),
+            has_cancellation=df['medium_category'].str.contains('解約', na=False)
+        )
+        
+        # customer_idごとの集計
+        customer_stats = df_with_flags.groupby('customer_id').agg({
+            'has_maturity': 'max',       # 満期の有無
+            'has_cancellation': 'max',    # 解約の有無
+            'is_complaint': 'sum',        # クレーム数
+            'customer_id': 'size'         # コンタクト数
+        }).compute()
+        
+        # 可視化1: 満期有無とクレーム数の関係
+        fig1 = px.box(
+            customer_stats,
+            x='has_maturity',
+            y='is_complaint',
+            title='満期有無による顧客ごとのクレーム数分布',
+            labels={
+                'has_maturity': '満期有無',
+                'is_complaint': 'クレーム数'
+            }
+        )
+        
+        # 可視化2: 満期有無とコンタクト数の関係
+        fig2 = px.box(
+            customer_stats,
+            x='has_maturity',
+            y='customer_id',
+            title='満期有無による顧客ごとのコンタクト数分布',
+            labels={
+                'has_maturity': '満期有無',
+                'customer_id': 'コンタクト数'
+            }
+        )
+        
+        return {'complaint_dist': fig1, 'contact_dist': fig2}
+
+    results = {
+        'cancellation_analysis': analyze_cancellation_impact(),
+        'polno_analysis': analyze_polno_impact(),
+        'maturity_analysis': analyze_maturity_impact()
+    }
+    
+    return results
+
+def analyze_sales_performance(df):
+    # 営業担当者別のクレームと契約成立の関係を分析
+    df_with_flags = df.assign(
+        has_contract=df['medium_category'].str.contains('契約成立', na=False)
+    )
+    
+    sales_stats = df_with_flags.groupby(['sales_person_id', 'is_complaint']).agg({
+        'has_contract': 'sum'  # 契約成立数
+    }).compute()
+    
+    fig = px.bar(
+        sales_stats.reset_index(),
+        x='sales_person_id',
+        y='has_contract',
+        color='is_complaint',
+        title='営業担当者別クレーム有無と契約成立数',
+        labels={
+            'sales_person_id': '営業担当者ID',
+            'has_contract': '契約成立数',
+            'is_complaint': 'クレーム有無'
+        },
+        barmode='group'
+    )
+    
+    return fig
+
 def analyze_large_csv(filepath):
     # データの読み込みと前処理
     df = read_large_csv(filepath)
-    
-    # 2020年のデータを削除
     df = df[df['event_datetime'].dt.year != 2020]
     
-    # 家族登録と契約成立の関係分析
-    def analyze_family_contract():
-        family_stats = df[df['small_category'].str.contains('家族登録', na=False)].compute()
-        
-        contract_by_family = pd.crosstab(
-            family_stats['small_category'],
-            family_stats['medium_category'].str.contains('契約成立', na=False)
-        )
-        
-        fig = px.bar(contract_by_family, 
-                    title='家族登録有無による契約成立の比較',
-                    labels={'value': '件数', 'small_category': '家族登録', 'medium_category': '契約成立'})
-        return fig
-    
-    # 解約の有無によるコンタクト数の分析
-    def analyze_contacts_by_cancellation():
-        contact_stats = df.groupby('customer_id').agg({
-            'medium_category': lambda x: x.str.contains('解約', na=False).any(),
-            'customer_id': 'count'
-        }).compute()
-        
-        fig = px.box(contact_stats, 
-                    x='medium_category',
-                    y='customer_id',
-                    title='解約有無別のコンタクト数分布',
-                    labels={'medium_category': '解約有無', 'customer_id': 'コンタクト数'})
-        return fig
-    
-    # POL_NOとELEC_FLGの関係分析
-    def analyze_pol_elec():
-        pol_stats = df[df['POL_NO'].notna()].compute()
-        
-        cross_tab = pd.crosstab(
-            [pol_stats['ELEC_FLG'], 
-             pol_stats['medium_category'].str.contains('契約成立', na=False)],
-            pol_stats['medium_category'].str.contains('解約', na=False)
-        )
-        
-        fig = px.bar(cross_tab.reset_index(), 
-                    title='ELEC_FLGカテゴリ別の契約成立・解約状況',
-                    barmode='group')
-        return fig
-    
-    # クレーム（is_complaint）と契約・解約の関係分析
-    def analyze_complaints():
-        complaint_stats = df.groupby('is_complaint').agg({
-            'medium_category': lambda x: (x.str.contains('契約成立', na=False).sum(),
-                                       x.str.contains('解約', na=False).sum())
-        }).compute()
-        
-        fig = px.bar(complaint_stats, 
-                    title='クレーム有無による契約成立・解約件数',
-                    barmode='group')
-        return fig
-    
-    # 営業担当者別のクレームと契約成立の関係
-    def analyze_sales_performance():
-        sales_stats = df.groupby(['sales_person_id', 'is_complaint']).agg({
-            'medium_category': lambda x: x.str.contains('契約成立', na=False).sum()
-        }).compute()
-        
-        fig = px.bar(sales_stats.reset_index(), 
-                    x='sales_person_id',
-                    y='medium_category',
-                    color='is_complaint',
-                    title='営業担当者別クレーム有無と契約成立数',
-                    barmode='group')
-        return fig
-    
-    # 満期関連の分析
-    def analyze_maturity():
-        maturity_stats = df.groupby(['customer_id']).agg({
-            'medium_category': lambda x: x.str.contains('満期', na=False).any(),
-            'is_complaint': 'sum',
-            'customer_id': 'count'
-        }).compute()
-        
-        fig = px.scatter(maturity_stats, 
-                        x='is_complaint',
-                        y='customer_id',
-                        color='medium_category',
-                        title='満期有無とクレーム数、コンタクト数の関係',
-                        labels={'is_complaint': 'クレーム数',
-                               'customer_id': 'コンタクト数',
-                               'medium_category': '満期有無'})
-        return fig
-    
-    return {
-        'family_contract': analyze_family_contract(),
-        'contacts_cancellation': analyze_contacts_by_cancellation(),
-        'pol_elec': analyze_pol_elec(),
-        'complaints': analyze_complaints(),
-        'sales_performance': analyze_sales_performance(),
-        'maturity': analyze_maturity()
+    # 各分析の実行
+    results = {
+        'family_contract': analyze_family_contract(df),
+        'customer_metrics': analyze_customer_metrics(df),
+        'sales_performance': analyze_sales_performance(df)
     }
+    
+    return results
 
 # 使用例
-# filepath = 'your_large_csv_file.csv'
+# filepath = 'your_csv_file.csv'
 # results = analyze_large_csv(filepath)
-# 各グラフの表示
-# for name, fig in results.items():
-#     fig.show()
 
-#%%
-def analyze_contacts_by_cancellation(df):
-    # まずmedium_categoryに対して解約の有無を判定する新しい列を作成
-    df = df.assign(has_cancellation=df['medium_category'].str.contains('解約', na=False))
-    
-    # グループ化と集計を明示的な集計関数で実行
-    contact_stats = df.groupby('customer_id').agg({
-        'has_cancellation': 'max',  # Trueが1つでもあればTrueになる
-        'customer_id': 'size'  # countの代わりにsizeを使用
-    }).compute()
-    
-    # 可視化
-    fig = px.box(contact_stats, 
-                x='has_cancellation',
-                y='customer_id',
-                title='解約有無別のコンタクト数分布',
-                labels={
-                    'has_cancellation': '解約有無',
-                    'customer_id': 'コンタクト数',
-                })
-    
-    return fig
+# 結果の表示例
+"""
+# 家族登録分析
+results['family_contract']['box_plot'].show()
+results['family_contract']['violin_plot'].show()
+print(results['family_contract']['statistics'])
+
+# 顧客メトリクス分析
+results['customer_metrics']['cancellation_analysis']['complaint_dist'].show()
+results['customer_metrics']['cancellation_analysis']['contact_dist'].show()
+results['customer_metrics']['polno_analysis'].show()
+results['customer_metrics']['maturity_analysis']['complaint_dist'].show()
+results['customer_metrics']['maturity_analysis']['contact_dist'].show()
+
+# 営業パフォーマンス分析
+results['sales_performance'].show()
+"""
