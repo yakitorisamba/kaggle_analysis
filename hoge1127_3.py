@@ -5,27 +5,43 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
-# データの読み込みと前処理
+def read_large_csv(filepath):
+    # すべての列の型をstrで初期化
+    dtypes = {col: 'string' for col in pd.read_csv(filepath, nrows=0).columns}
+    
+    # is_complaintの型を指定
+    dtypes['is_complaint'] = 'bool'
+    
+    # event_datetimeはparse_datesで処理するため、dtypesから除外
+    if 'event_datetime' in dtypes:
+        del dtypes['event_datetime']
+    
+    # データ読み込み
+    df = dd.read_csv(
+        filepath,
+        dtype=dtypes,
+        parse_dates=['event_datetime'],
+        assume_missing=True
+    )
+    
+    return df
+
 def analyze_large_csv(filepath):
-    # daskを使用して大規模CSVを読み込む
-    df = dd.read_csv(filepath)
+    # データの読み込みと前処理
+    df = read_large_csv(filepath)
     
     # 2020年のデータを削除
-    df['event_datetime'] = dd.to_datetime(df['event_datetime'])
     df = df[df['event_datetime'].dt.year != 2020]
     
     # 家族登録と契約成立の関係分析
     def analyze_family_contract():
-        # small_categoryに'家族登録'が含まれる行を抽出
         family_stats = df[df['small_category'].str.contains('家族登録', na=False)].compute()
         
-        # medium_categoryの契約成立の集計
         contract_by_family = pd.crosstab(
             family_stats['small_category'],
             family_stats['medium_category'].str.contains('契約成立', na=False)
         )
         
-        # 可視化
         fig = px.bar(contract_by_family, 
                     title='家族登録有無による契約成立の比較',
                     labels={'value': '件数', 'small_category': '家族登録', 'medium_category': '契約成立'})
@@ -49,7 +65,6 @@ def analyze_large_csv(filepath):
     def analyze_pol_elec():
         pol_stats = df[df['POL_NO'].notna()].compute()
         
-        # クロス集計
         cross_tab = pd.crosstab(
             [pol_stats['ELEC_FLG'], 
              pol_stats['medium_category'].str.contains('契約成立', na=False)],
