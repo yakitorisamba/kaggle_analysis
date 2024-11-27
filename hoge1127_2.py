@@ -2,22 +2,15 @@ import csv
 import os
 
 def merge_consecutive_rows(csv_input_path, csv_output_path, key_columns):
-    """
-    CSVファイル内の連続する行を、複数の指定されたキー列に基づいてマージします。
-    
-    Parameters:
-    csv_input_path (str): 入力CSVファイルのパス
-    csv_output_path (str): 出力CSVファイルのパス
-    key_columns (list): マージのキーとなる列名のリスト
-    """
-    # キー列が文字列として渡された場合、リストに変換
+    # キー列が文字列として渡された場合、リストに変換します
     if isinstance(key_columns, str):
         key_columns = [key_columns]
-        
+    
     temp_output_path = csv_output_path + '.tmp'
     current_fieldnames = set()
+    all_rows = []
     
-    # 初期フィールド名の取得
+    # 最初にキー列の存在確認とフィールド名の取得を行います
     with open(csv_input_path, 'r', newline='', encoding='cp932') as csvfile_in:
         reader = csv.DictReader(csvfile_in, quotechar='"')
         # キー列の存在確認
@@ -27,62 +20,22 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_columns):
         original_fieldnames = reader.fieldnames.copy()
         current_fieldnames.update(original_fieldnames)
 
-    with open(csv_input_path, 'r', newline='', encoding='cp932') as csvfile_in, \
-         open(temp_output_path, 'w', newline='', encoding='cp932') as temp_output:
-        
+    with open(csv_input_path, 'r', newline='', encoding='cp932') as csvfile_in:
         reader = csv.DictReader(csvfile_in, quotechar='"')
         current_group = []
         current_key_values = None
 
-        # 一時ファイルの初期化
-        temp_fieldnames = list(original_fieldnames)
-        temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames, 
-                                   quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        temp_writer.writeheader()
-
         def get_key_values(row):
-            """
-            行から複数のキー値を取得し、タプルとして返します。
-            """
+            # 行から複数のキー値をタプルとして取得します
             return tuple(row[col] for col in key_columns)
 
-        def handle_new_columns():
-            """
-            新しい列が追加された場合に一時ファイルを再構成します。
-            """
-            nonlocal temp_writer, temp_fieldnames
-            temp_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
-            
-            # 既存のデータを保存
-            existing_content = []
-            with open(temp_output_path, 'r', newline='', encoding='cp932') as old_temp:
-                old_reader = csv.DictReader(old_temp, quotechar='"')
-                for row in old_reader:
-                    existing_content.append(row)
-            
-            # 新しい列を含めて一時ファイルを書き直し
-            with open(temp_output_path, 'w', newline='', encoding='cp932') as new_temp:
-                new_writer = csv.DictWriter(new_temp, fieldnames=temp_fieldnames,
-                                          quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                new_writer.writeheader()
-                for row in existing_content:
-                    new_writer.writerow(row)
-            
-            # 書き込みオブジェクトを更新
-            temp_writer = csv.DictWriter(temp_output, fieldnames=temp_fieldnames,
-                                       quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
         def merge_group(group):
-            """
-            同じキー値を持つ行のグループをマージします。
-            """
             if not group:
                 return None
-            
             merged_row = {}
             column_values = {}
             
-            # グループ内の全ての値を収集
+            # グループ内の全ての値を収集します
             for row in group:
                 for col in row.keys():
                     if col not in column_values:
@@ -90,39 +43,39 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_columns):
                     else:
                         column_values[col].append(row[col])
 
-            # 各列の値を処理
-            new_columns_added = False
+            # 各列を処理します
             for col, values in column_values.items():
+                # 重複を除いた値のリストを作成
                 unique_values = []
                 for val in values:
                     if val not in unique_values:
                         unique_values.append(val)
                 
                 if len(unique_values) == 1:
+                    # 値が1つの場合はそのまま使用
                     merged_row[col] = unique_values[0]
                 else:
+                    # 複数の値がある場合は新しい列を作成
                     for idx, val in enumerate(unique_values):
                         col_name = col if idx == 0 else f"{col}_{idx}"
                         merged_row[col_name] = val
-                        if col_name not in current_fieldnames:
-                            current_fieldnames.add(col_name)
-                            new_columns_added = True
-            
-            if new_columns_added:
-                handle_new_columns()
+                        current_fieldnames.add(col_name)
             
             return merged_row
 
-        # メインの処理ループ
+        # 行の処理
         for row in reader:
+            # 複数のキー値を取得
             key_values = get_key_values(row)
             if key_values == current_key_values or current_key_values is None:
+                # 同じキー値の場合はグループに追加
                 current_group.append(row)
                 current_key_values = key_values
             else:
+                # キー値が変わった場合は現在のグループをマージ
                 merged_row = merge_group(current_group)
                 if merged_row:
-                    temp_writer.writerow(merged_row)
+                    all_rows.append(merged_row)
                 current_group = [row]
                 current_key_values = key_values
 
@@ -130,30 +83,24 @@ def merge_consecutive_rows(csv_input_path, csv_output_path, key_columns):
         if current_group:
             merged_row = merge_group(current_group)
             if merged_row:
-                temp_writer.writerow(merged_row)
+                all_rows.append(merged_row)
 
-    # 最終的な出力ファイルの作成
+    # 最終的な列名リストを作成（元の列順を維持しつつ、新しい列を追加）
     final_fieldnames = list(original_fieldnames) + sorted(list(current_fieldnames - set(original_fieldnames)))
     
-    with open(temp_output_path, 'r', newline='', encoding='cp932') as temp_input, \
-         open(csv_output_path, 'w', newline='', encoding='cp932') as csvfile_out:
-        
-        reader = csv.DictReader(temp_input, quotechar='"')
+    # 最終的な出力ファイルを作成
+    with open(csv_output_path, 'w', newline='', encoding='cp932') as csvfile_out:
         writer = csv.DictWriter(csvfile_out, fieldnames=final_fieldnames,
                               quotechar='"', quoting=csv.QUOTE_MINIMAL)
         writer.writeheader()
         
-        for row in reader:
+        # 全ての行を書き込み
+        for row in all_rows:
+            # 全てのフィールドが存在することを確認
             complete_row = {field: row.get(field, '') for field in final_fieldnames}
             writer.writerow(complete_row)
 
-    # 一時ファイルの削除
-    try:
-        os.remove(temp_output_path)
-    except:
-        pass
-
-# 使用例：
+# 使用例:
 # csv_input_path = 'input.csv'
 # csv_output_path = 'output.csv'
 # key_columns = ['id', 'category']  # 複数のキー列を指定
