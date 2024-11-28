@@ -17,20 +17,9 @@ def read_csv_in_chunks(file_pattern):
     if not all_files:
         raise ValueError(f"No files found matching pattern: {file_pattern}")
     
-    # 最初のファイルを読み込み
-    print(f"Processing file: {all_files[0]}")
-    combined_df = pl.read_csv(
-        all_files[0], 
-        has_header=False, 
-        new_columns=columns, 
-        encoding='cp932'
-    ).filter(pl.col('company_type') == 'G').select([
-        'event_datetime', 'sales_person', 'content1', 'content2',
-        'converted_contract_no', 'sales_person_id', 'customer_id'
-    ])
+    all_dfs = []
     
-    # 残りのファイルを処理
-    for file in all_files[1:]:
+    for file in all_files:
         print(f"Processing file: {file}")
         df = pl.read_csv(
             file, 
@@ -42,14 +31,11 @@ def read_csv_in_chunks(file_pattern):
             'converted_contract_no', 'sales_person_id', 'customer_id'
         ])
         
-        # 同じevent_dateとconverted_contract_noを持つ行の処理
-        combined_df = pl.concat([combined_df, df])
-        
-        # 重複行の処理
-        for col in combined_df.columns:
+        # 同一ファイル内での重複行の処理
+        for col in df.columns:
             if col not in ['event_datetime', 'converted_contract_no']:
                 # 重複する行のグループごとに異なる値を持つものを特定
-                different_values = (combined_df
+                different_values = (df
                     .group_by(['event_datetime', 'converted_contract_no'])
                     .agg([
                         pl.col(col).list().unique().alias('unique_vals')
@@ -59,18 +45,30 @@ def read_csv_in_chunks(file_pattern):
                 
                 # 異なる値が存在する場合、インデックス付きの列を作成
                 if len(different_values) > 0:
-                    for i in [1, 2]:  # _1, _2 のみ作成
-                        idx = i - 1  # リストのインデックス用
-                        combined_df = combined_df.with_columns([
+                    # それぞれの重複グループに対して必要なインデックス数を計算
+                    max_duplicates = (df
+                        .group_by(['event_datetime', 'converted_contract_no'])
+                        .agg([
+                            pl.col(col).list().unique().len().alias('unique_count')
+                        ])
+                        .select('unique_count')
+                        .max())[0, 0]
+                    
+                    # 必要な数のインデックス付き列を作成
+                    for i in range(1, max_duplicates + 1):
+                        df = df.with_columns([
                             pl.when(pl.col('event_datetime').is_in(different_values['event_datetime']) & 
                                   pl.col('converted_contract_no').is_in(different_values['converted_contract_no']))
                             .then(pl.col(col))
                             .alias(f'{col}_{i}')
                         ])
+        
+        # 重複行を削除（インデックス付きの列は保持）
+        df = df.unique(subset=['event_datetime', 'converted_contract_no'])
+        all_dfs.append(df)
     
-    # 重複行を削除（インデックス付きの列は保持）
-    combined_df = combined_df.unique(subset=['event_datetime', 'converted_contract_no'])
-    
+    # すべてのファイルのDataFrameを結合
+    combined_df = pl.concat(all_dfs)
     return combined_df
 
 def load_auxiliary_files():
